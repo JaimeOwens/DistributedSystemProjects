@@ -1,0 +1,10 @@
+{
+    "localID": "q",
+    "localAddr": ":4001",
+    "remotePros": [
+        {
+            "RemoteID": "p",
+            "RemoteAddr": ":4000"
+        }
+    ]
+}
