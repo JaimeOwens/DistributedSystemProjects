@@ -1,8 +1,8 @@
 package main
 
 import (
+	"DistributedSystemProjects/expr2/lockrpc"
 	"encoding/json"
-	"expr2/thrift/lock"
 	"fmt"
 	"log"
 	"math/rand"
@@ -12,31 +12,30 @@ import (
 )
 
 const (
-	HOST = "127.0.0.1"
-	PORT = "9001"
+	HOST = "localhost"
+	PORT = "6790"
 )
 
 var MapRWMutex *sync.RWMutex
-var CliState map[int64]bool = make(map[int64]bool, 0)
 
-type FormatDataImpl struct{}
+var ClientState map[int64]bool = make(map[int64]bool, 0)
 
 func MapAddNewClient(id int64) {
-	_, exist := CliState[id]
-	if exist {
+	_, exits := ClientState[id]
+	if exits {
 		return
 	} else {
 		MapRWMutex.Lock()
-		CliState[id] = false
+		ClientState[id] = false
 		MapRWMutex.Unlock()
-		log.Print("Add new client:", id)
+		log.Print("add new client:", id)
 	}
 }
 
-func IsLock() bool {
+func IsLockAlready() bool {
 	flag := false
 	MapRWMutex.RLock()
-	for _, v := range CliState {
+	for _, v := range ClientState {
 		if v == true {
 			flag = true
 			break
@@ -48,12 +47,12 @@ func IsLock() bool {
 
 func RandomLock() int64 {
 	var changeID int64 = -1
-	if IsLock() {
+	if IsLockAlready() {
 		return changeID
 	}
-	i := rand.Intn(len(CliState))
+	i := rand.Intn(len(ClientState))
 	MapRWMutex.RLock()
-	for k := range CliState {
+	for k := range ClientState {
 		if i == 0 {
 			changeID = k
 			break
@@ -63,7 +62,7 @@ func RandomLock() int64 {
 	MapRWMutex.RUnlock()
 	if changeID != -1 {
 		MapRWMutex.Lock()
-		CliState[changeID] = true
+		ClientState[changeID] = true
 		MapRWMutex.Unlock()
 	}
 	return changeID
@@ -72,7 +71,7 @@ func RandomLock() int64 {
 func GetCurrentLock() int64 {
 	var res int64 = -1
 	MapRWMutex.RLock()
-	for key, val := range CliState {
+	for key, val := range ClientState {
 		if val == true {
 			res = key
 		}
@@ -82,16 +81,16 @@ func GetCurrentLock() int64 {
 }
 
 func UnlockClient(id int64) {
-	_, exists := CliState[id]
-	if exists {
-		CliState[id] = false
+	_, exits := ClientState[id]
+	if exits {
+		ClientState[id] = false
 	}
 }
 
 func LockClear() {
 	var changeID int64 = -1
 	MapRWMutex.RLock()
-	for key, val := range CliState {
+	for key, val := range ClientState {
 		if val == true {
 			changeID = key
 			break
@@ -100,58 +99,60 @@ func LockClear() {
 	MapRWMutex.RUnlock()
 	if changeID != -1 {
 		MapRWMutex.Lock()
-		CliState[changeID] = false
+		ClientState[changeID] = false
 		MapRWMutex.Unlock()
 	}
 }
 
-func (fdi *FormatDataImpl) DoLock(req *lock.Req) (*lock.Response, error) {
+type FormatDataImpl struct{}
+
+func (fdi *FormatDataImpl) DoLock(req *lockrpc.Req) (*lockrpc.Rsp, error) {
 	MapAddNewClient(req.CliID)
 	RandomLock()
 	lockID := GetCurrentLock()
-	var rsp lock.Response
+	var rsp lockrpc.Rsp
 	rsp.CliID = lockID
 	rsp.Operator = "acquire"
 	return &rsp, nil
 }
 
-func (fdi *FormatDataImpl) UnLock(req *lock.Req) (*lock.Response, error) {
+func (fdi *FormatDataImpl) UnLock(req *lockrpc.Req) (*lockrpc.Rsp, error) {
 	UnlockClient(req.CliID)
-	var rsp lock.Response
+	var rsp lockrpc.Rsp
 	rsp.CliID = req.CliID
 	rsp.Operator = "release"
-	log.Print("ClientID:", rsp.CliID, "operator=", rsp.Operator)
+	log.Print("clockID=", rsp.CliID, " operator=", rsp.Operator)
 	return &rsp, nil
 }
 
-func (fdi *FormatDataImpl) ClientStates() (*lock.Response, error) {
-	var rsp lock.Response
+func (fdi *FormatDataImpl) ClientStates() (*lockrpc.Rsp, error) {
+	var rsp lockrpc.Rsp
 	rsp.CliID = -1
 	rsp.Operator = "-1"
-	jsonString, err := json.Marshal(CliState)
-	if err != nil {
-		log.Print(err)
-		return
+	jsonString, err := json.Marshal(ClientState)
+	if err == nil {
+		rsp.Buffer = string(jsonString)
 	}
-	rsp.Buffer = string(jsonString)
 	return &rsp, nil
 }
 
-func RunServer() {
-	handler := &FormatDataImpl
-	processor := lock.NewGetLockProcessor(handler)
+func StartSever() {
+	handler := &FormatDataImpl{}
+	processor := lockrpc.NewGetLockProcessor(handler)
+
 	serverTransport, err := thrift.NewTServerSocket(HOST + ":" + PORT)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalln("Error:", err)
 	}
 	transportFactory := thrift.NewTFramedTransportFactory(thrift.NewTTransportFactory())
 	protocolFactory := thrift.NewTBinaryProtocolFactoryDefault()
+
 	server := thrift.NewTSimpleServer4(processor, serverTransport, transportFactory, protocolFactory)
-	fmt.Println("Start running server: ", HOST+":"+PORT)
+	fmt.Println("Running at:", HOST+":"+PORT)
 	server.Serve()
 }
 
 func main() {
 	MapRWMutex = new(sync.RWMutex)
-	Runserver()
+	StartSever()
 }
